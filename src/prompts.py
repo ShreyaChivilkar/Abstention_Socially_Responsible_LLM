@@ -1,5 +1,9 @@
 BASE_PROMPT = """Answer the following multiple choice question.
 
+Context:
+{context}
+
+Question:
 {question}
 
 Options:
