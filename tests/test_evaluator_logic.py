@@ -40,6 +40,7 @@ def test_default_baseline_output_path_is_stable():
         model="mistralai/Mistral-7B-Instruct-v0.2",
         engine="vllm",
         split="test",
+        lora_adapter=None,
     )
 
     assert safe_name(args.model) == "mistralai_mistral-7b-instruct-v0.2"
@@ -49,6 +50,24 @@ def test_default_baseline_output_path_is_stable():
         / "baselines"
         / "test"
         / "mistralai_mistral-7b-instruct-v0.2__vllm__base_prompt_context_abc.json"
+    )
+
+
+def test_default_lora_eval_output_path_is_stable():
+    args = SimpleNamespace(
+        model="mistralai/Mistral-7B-Instruct-v0.2",
+        engine="vllm",
+        split="dev",
+        lora_adapter=str(PROJECT_DIR / "outputs" / "sft" / "checkpoints" / "mistral__gemma-4-31b-v2-lora"),
+    )
+
+    assert default_output_path(args) == (
+        PROJECT_DIR
+        / "outputs"
+        / "sft"
+        / "evals"
+        / "dev"
+        / "mistralai_mistral-7b-instruct-v0.2__mistral__gemma-4-31b-v2-lora__vllm__base_prompt_context_abc.json"
     )
 
 

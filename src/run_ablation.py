@@ -19,6 +19,8 @@ def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--engine", choices=["transformers", "vllm"], default="vllm")
     parser.add_argument("--model", type=str, default="mistralai/Mistral-7B-Instruct-v0.2")
+    parser.add_argument("--lora_adapter", type=str, default=None,
+                        help="Optional PEFT LoRA adapter path to evaluate with the base model")
     parser.add_argument("--split", choices=["train", "dev", "test"], default="test")
     parser.add_argument("--output", type=str, default=None,
                         help="Output JSON path. Defaults to outputs/baselines/<split>/<model>__<engine>__base_prompt_context_abc.json")
@@ -29,14 +31,14 @@ def parse_args():
     return parser.parse_args()
 
 
-def load_engine(engine_name, model_name):
+def load_engine(engine_name, model_name, lora_adapter=None):
     if engine_name == "transformers":
         from transformer_engine import TransformerEngine
-        return TransformerEngine(model_name)
+        return TransformerEngine(model_name, lora_adapter=lora_adapter)
 
     if engine_name == "vllm":
         from vllm_engine import VLLMEngine
-        return VLLMEngine(model_name)
+        return VLLMEngine(model_name, lora_adapter=lora_adapter)
 
     raise ValueError(f"Unknown engine: {engine_name}")
 
@@ -55,6 +57,11 @@ def safe_name(text):
 
 def default_output_path(args):
     model_name = safe_name(args.model)
+    if args.lora_adapter:
+        adapter_name = safe_name(Path(args.lora_adapter).name)
+        filename = f"{model_name}__{adapter_name}__{args.engine}__{PROMPT_NAME}.json"
+        return OUTPUT_DIR / "sft" / "evals" / args.split / filename
+
     filename = f"{model_name}__{args.engine}__{PROMPT_NAME}.json"
     return OUTPUT_DIR / "baselines" / args.split / filename
 
@@ -73,7 +80,7 @@ def get_git_commit():
 
 def get_package_versions():
     versions = {}
-    for package in ["torch", "transformers", "vllm"]:
+    for package in ["torch", "transformers", "vllm", "peft"]:
         try:
             module = __import__(package)
             versions[package] = getattr(module, "__version__", None)
@@ -211,13 +218,19 @@ def compute_metrics_by_context(rows):
 def run(args):
     input_path = DATA_DIR / f"{args.split}.jsonl"
     assert input_path.exists(), f"Missing split file: {input_path}"
+    if args.lora_adapter is not None:
+        lora_adapter_path = Path(args.lora_adapter)
+        if not lora_adapter_path.is_absolute():
+            lora_adapter_path = ROOT_DIR / lora_adapter_path
+        assert lora_adapter_path.exists(), f"Missing LoRA adapter path: {lora_adapter_path}"
+        args.lora_adapter = str(lora_adapter_path)
 
     output_path = Path(args.output) if args.output else default_output_path(args)
     if not output_path.is_absolute():
         output_path = ROOT_DIR / output_path
     assert args.overwrite or not output_path.exists(), f"Output already exists: {output_path}"
 
-    engine = load_engine(args.engine, args.model)
+    engine = load_engine(args.engine, args.model, lora_adapter=args.lora_adapter)
 
     with open(input_path) as f:
         data = [json.loads(line) for line in f]
@@ -282,6 +295,8 @@ def run(args):
     print("\nRESULTS")
     print(f"Engine: {args.engine}")
     print(f"Model: {args.model}")
+    if args.lora_adapter:
+        print(f"LoRA adapter: {args.lora_adapter}")
     print(f"Split: {args.split}")
 
     for name, slice_metrics in metrics.items():
@@ -298,6 +313,8 @@ def run(args):
         "metadata": {
             "engine": args.engine,
             "model": args.model,
+            "lora_adapter": args.lora_adapter,
+            "lora_adapter_relative": display_path(Path(args.lora_adapter)) if args.lora_adapter else None,
             "split": args.split,
             "prompt_name": PROMPT_NAME,
             "input_path": str(input_path),
