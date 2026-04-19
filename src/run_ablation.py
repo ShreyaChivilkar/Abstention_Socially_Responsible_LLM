@@ -1,5 +1,6 @@
 import argparse
 import json
+import subprocess
 from datetime import datetime
 from pathlib import Path
 
@@ -11,6 +12,7 @@ from prompts import BASE_PROMPT
 ROOT_DIR = Path(__file__).resolve().parents[1]
 DATA_DIR = ROOT_DIR / "data"
 OUTPUT_DIR = ROOT_DIR / "outputs"
+PROMPT_NAME = "base_prompt_context_abc"
 
 
 def parse_args():
@@ -18,6 +20,10 @@ def parse_args():
     parser.add_argument("--engine", choices=["transformers", "vllm"], default="vllm")
     parser.add_argument("--model", type=str, default="mistralai/Mistral-7B-Instruct-v0.2")
     parser.add_argument("--split", choices=["train", "dev", "test"], default="test")
+    parser.add_argument("--output", type=str, default=None,
+                        help="Output JSON path. Defaults to outputs/baselines/<split>/<model>__<engine>__base_prompt_context_abc.json")
+    parser.add_argument("--overwrite", action="store_true",
+                        help="Allow overwriting an existing output JSON")
     parser.add_argument("--num_samples", type=int, default=None,
                         help="Number of samples to run (default: all)")
     return parser.parse_args()
@@ -33,6 +39,54 @@ def load_engine(engine_name, model_name):
         return VLLMEngine(model_name)
 
     raise ValueError(f"Unknown engine: {engine_name}")
+
+
+def safe_name(text):
+    safe = []
+    for char in text.lower():
+        if char.isalnum():
+            safe.append(char)
+        elif char in {".", "-"}:
+            safe.append(char)
+        else:
+            safe.append("_")
+    return "".join(safe).strip("_")
+
+
+def default_output_path(args):
+    model_name = safe_name(args.model)
+    filename = f"{model_name}__{args.engine}__{PROMPT_NAME}.json"
+    return OUTPUT_DIR / "baselines" / args.split / filename
+
+
+def get_git_commit():
+    try:
+        return subprocess.check_output(
+            ["git", "rev-parse", "HEAD"],
+            cwd=ROOT_DIR,
+            text=True,
+            stderr=subprocess.DEVNULL,
+        ).strip()
+    except Exception:
+        return None
+
+
+def get_package_versions():
+    versions = {}
+    for package in ["torch", "transformers", "vllm"]:
+        try:
+            module = __import__(package)
+            versions[package] = getattr(module, "__version__", None)
+        except ImportError:
+            versions[package] = None
+    return versions
+
+
+def display_path(path):
+    try:
+        return str(path.relative_to(ROOT_DIR))
+    except ValueError:
+        return str(path)
 
 
 # ----------------------------
@@ -155,9 +209,15 @@ def compute_metrics_by_context(rows):
 # Main
 # ----------------------------
 def run(args):
-    engine = load_engine(args.engine, args.model)
     input_path = DATA_DIR / f"{args.split}.jsonl"
     assert input_path.exists(), f"Missing split file: {input_path}"
+
+    output_path = Path(args.output) if args.output else default_output_path(args)
+    if not output_path.is_absolute():
+        output_path = ROOT_DIR / output_path
+    assert args.overwrite or not output_path.exists(), f"Output already exists: {output_path}"
+
+    engine = load_engine(args.engine, args.model)
 
     with open(input_path) as f:
         data = [json.loads(line) for line in f]
@@ -232,17 +292,19 @@ def run(args):
         print(f"Commit rate: {slice_metrics['commit_rate']:.3f}")
         print(f"Invalid rate: {slice_metrics['invalid_rate']:.3f}")
 
-    OUTPUT_DIR.mkdir(exist_ok=True)
-
-    safe_model = args.model.replace("/", "_")
-    output_path = OUTPUT_DIR / f"{args.split}_{args.engine}_{safe_model}.json"
+    output_path.parent.mkdir(parents=True, exist_ok=True)
 
     final_output = {
         "metadata": {
             "engine": args.engine,
             "model": args.model,
             "split": args.split,
+            "prompt_name": PROMPT_NAME,
             "input_path": str(input_path),
+            "input_path_relative": display_path(input_path),
+            "output_path_relative": display_path(output_path),
+            "git_commit": get_git_commit(),
+            "package_versions": get_package_versions(),
             "timestamp": datetime.now().isoformat(),
             "num_samples": len(results)
         },
