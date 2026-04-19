@@ -2,6 +2,7 @@ import json
 import sys
 from collections import Counter
 from pathlib import Path
+from types import SimpleNamespace
 
 
 PROJECT_DIR = Path(__file__).resolve().parents[1]
@@ -10,8 +11,10 @@ sys.path.insert(0, str(PROJECT_DIR / "src"))
 from run_ablation import (  # noqa: E402
     compute_metrics,
     compute_metrics_by_context,
+    default_output_path,
     is_abstain_option,
     map_prediction,
+    safe_name,
     unknown_pos_from_metadata,
 )
 
@@ -30,6 +33,23 @@ def test_prediction_parsing_requires_option_letters():
 
     for text, expected in cases.items():
         assert map_prediction(text) == expected
+
+
+def test_default_baseline_output_path_is_stable():
+    args = SimpleNamespace(
+        model="mistralai/Mistral-7B-Instruct-v0.2",
+        engine="vllm",
+        split="test",
+    )
+
+    assert safe_name(args.model) == "mistralai_mistral-7b-instruct-v0.2"
+    assert default_output_path(args) == (
+        PROJECT_DIR
+        / "outputs"
+        / "baselines"
+        / "test"
+        / "mistralai_mistral-7b-instruct-v0.2__vllm__base_prompt_context_abc.json"
+    )
 
 
 def test_abstention_classification_uses_metadata_position():
