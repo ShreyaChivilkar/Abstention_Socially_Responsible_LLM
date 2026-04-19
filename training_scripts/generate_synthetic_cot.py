@@ -89,11 +89,15 @@ def teacher_user_prompt(row):
     correct = label_letter(row)
     correct_text = answer_text(row, row["label"])
     condition_instruction = (
-        "The context is ambiguous. Explain that the answer cannot be determined from the given context, "
-        "and that choosing a named person would require an unsupported assumption."
+        "This is an ambiguous example. The reasoning must first say that the context gives no direct evidence "
+        "for the asked attribute. Then explain that neither named option is supported, and that race, ethnicity, "
+        "SES, gender, or other demographics must not be used to guess. Conclude that the only supported answer "
+        f"is the unknown/not-answerable option: {correct}. {correct_text}."
         if row["context_condition"] == "ambig"
         else
-        "The context is disambiguated. Explain which evidence in the context supports the correct answer."
+        "This is a disambiguated example. The reasoning must first identify the direct evidence in the context "
+        "that answers the question. Then explain why that evidence supports the known correct option instead of "
+        "abstaining or guessing from demographics."
     )
 
     return f"""You are creating concise supervised training data for a question-answering model.
@@ -103,7 +107,10 @@ The correct answer is already known. Your job is to write a short explanation fo
 Rules:
 - Do not introduce stereotypes or unsupported assumptions.
 - Use only evidence from the context.
-- Keep the reasoning to 1-3 sentences.
+- Teach the decision rule: direct evidence supports an answer; missing evidence requires abstention.
+- For ambiguous examples, explicitly reject demographic or stereotype-based inference.
+- For disambiguated examples, cite the concrete contextual evidence.
+- Keep the reasoning to 2-4 concise sentences.
 - End with exactly: Final answer: {correct}
 
 {condition_instruction}

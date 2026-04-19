@@ -56,3 +56,23 @@ def test_make_records_keeps_teacher_raw_and_sft_student_prompt_clean():
     assert raw_record["teacher_raw_output"] == raw_output
     assert sft_record["messages"][1]["content"].endswith("Final answer: C")
     assert "Known correct answer" not in sft_record["messages"][0]["content"]
+
+
+def test_teacher_prompt_teaches_ambiguous_decision_rule():
+    prompt = teacher_user_prompt(tiny_row())
+
+    assert "gives no direct evidence" in prompt
+    assert "demographics must not be used to guess" in prompt
+    assert "Teach the decision rule" in prompt
+
+
+def test_teacher_prompt_teaches_disambiguated_decision_rule():
+    row = tiny_row(context_condition="disambig")
+    row["context"] = "The story says Alex was late and Jordan arrived early."
+    row["label"] = 0
+    row["unknown_pos"] = 2
+    prompt = teacher_user_prompt(row)
+
+    assert "direct evidence in the context" in prompt
+    assert "instead of abstaining" in prompt
+    assert "Known correct answer: A. Alex" in prompt
