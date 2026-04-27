@@ -6,6 +6,8 @@ TRAIN_FILE="${TRAIN_FILE:-$ROOT_DIR/outputs/synthetic/sft_data/train__gemma-4-31
 LOG_ROOT="${LOG_ROOT:-$ROOT_DIR/logs/sft}"
 TRAIN_LOG_DIR="$LOG_ROOT/train"
 EVAL_LOG_DIR="$LOG_ROOT/eval"
+START_AT="${START_AT:-}"
+STARTED=0
 
 mkdir -p "$TRAIN_LOG_DIR" "$EVAL_LOG_DIR"
 
@@ -64,15 +66,33 @@ run_model() {
   echo "[$(timestamp)] Completed: $label"
 }
 
+maybe_run_model() {
+  local label="$1"
+  local model="$2"
+  local per_device_batch_size="$3"
+  local gradient_accumulation_steps="$4"
+
+  if [[ -n "$START_AT" && "$STARTED" -eq 0 && "$model" != "$START_AT" ]]; then
+    echo "[$(timestamp)] Skipping until START_AT=$START_AT: $label"
+    return
+  fi
+
+  STARTED=1
+  run_model "$label" "$model" "$per_device_batch_size" "$gradient_accumulation_steps"
+}
+
 echo "[$(timestamp)] Running remaining LoRA SFT models"
 echo "[$(timestamp)] Root dir: $ROOT_DIR"
 echo "[$(timestamp)] Train file: $TRAIN_FILE"
+if [[ -n "$START_AT" ]]; then
+  echo "[$(timestamp)] START_AT: $START_AT"
+fi
 echo "[$(timestamp)] Python: $(command -v python)"
 python --version
 
-run_model "Llama 3.1 8B Instruct" "meta-llama/Meta-Llama-3.1-8B-Instruct" 16 2
-run_model "Qwen 3 8B" "Qwen/Qwen3-8B" 16 2
-run_model "Gemma 3 12B IT" "google/gemma-3-12b-it" 8 4
+maybe_run_model "Llama 3.1 8B Instruct" "meta-llama/Meta-Llama-3.1-8B-Instruct" 16 2
+maybe_run_model "Qwen 3 8B" "Qwen/Qwen3-8B" 16 2
+maybe_run_model "Gemma 3 12B IT" "google/gemma-3-12b-it" 8 4
 
 echo "[$(timestamp)] All remaining models completed successfully"
 echo "[$(timestamp)] Train logs: $TRAIN_LOG_DIR"
