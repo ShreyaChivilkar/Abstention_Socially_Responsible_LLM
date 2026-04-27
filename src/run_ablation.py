@@ -28,17 +28,26 @@ def parse_args():
                         help="Allow overwriting an existing output JSON")
     parser.add_argument("--num_samples", type=int, default=None,
                         help="Number of samples to run (default: all)")
+    parser.add_argument("--vllm_gpu_memory_utilization", type=float, default=None,
+                        help="Optional vLLM GPU memory utilization cap")
+    parser.add_argument("--vllm_max_model_len", type=int, default=None,
+                        help="Optional vLLM max model length override")
     return parser.parse_args()
 
 
-def load_engine(engine_name, model_name, lora_adapter=None):
+def load_engine(engine_name, model_name, lora_adapter=None, vllm_gpu_memory_utilization=None, vllm_max_model_len=None):
     if engine_name == "transformers":
         from transformer_engine import TransformerEngine
         return TransformerEngine(model_name, lora_adapter=lora_adapter)
 
     if engine_name == "vllm":
         from vllm_engine import VLLMEngine
-        return VLLMEngine(model_name, lora_adapter=lora_adapter)
+        return VLLMEngine(
+            model_name,
+            lora_adapter=lora_adapter,
+            gpu_memory_utilization=vllm_gpu_memory_utilization,
+            max_model_len=vllm_max_model_len,
+        )
 
     raise ValueError(f"Unknown engine: {engine_name}")
 
@@ -230,7 +239,13 @@ def run(args):
         output_path = ROOT_DIR / output_path
     assert args.overwrite or not output_path.exists(), f"Output already exists: {output_path}"
 
-    engine = load_engine(args.engine, args.model, lora_adapter=args.lora_adapter)
+    engine = load_engine(
+        args.engine,
+        args.model,
+        lora_adapter=args.lora_adapter,
+        vllm_gpu_memory_utilization=args.vllm_gpu_memory_utilization,
+        vllm_max_model_len=args.vllm_max_model_len,
+    )
 
     with open(input_path) as f:
         data = [json.loads(line) for line in f]

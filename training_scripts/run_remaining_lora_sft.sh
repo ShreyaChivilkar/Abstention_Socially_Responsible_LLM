@@ -56,6 +56,8 @@ run_model() {
     --model "$model" \
     --lora_adapter "$checkpoint_dir" \
     --split dev \
+    --vllm_gpu_memory_utilization 0.75 \
+    --vllm_max_model_len 4096 \
     --overwrite \
     2>&1 | tee "$eval_log"
 
