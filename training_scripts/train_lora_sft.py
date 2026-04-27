@@ -112,10 +112,12 @@ def render_example(tokenizer, row, max_seq_length):
         add_special_tokens=False,
         truncation=True,
         max_length=max_seq_length,
+        return_token_type_ids=True,
     )
 
     input_ids = encoded["input_ids"]
     attention_mask = encoded["attention_mask"]
+    token_type_ids = encoded.get("token_type_ids")
     labels = list(input_ids)
     prompt_len = min(len(prompt_ids), len(labels))
     labels[:prompt_len] = [-100] * prompt_len
@@ -125,12 +127,15 @@ def render_example(tokenizer, row, max_seq_length):
         f"Increase --max_seq_length."
     )
 
-    return {
+    example = {
         "input_ids": input_ids,
         "attention_mask": attention_mask,
         "labels": labels,
         "example_id": row.get("example_id"),
     }
+    if token_type_ids is not None:
+        example["token_type_ids"] = token_type_ids
+    return example
 
 
 def package_versions():
@@ -191,18 +196,24 @@ def main():
         input_ids = []
         attention_mask = []
         labels = []
+        token_type_ids = [] if "token_type_ids" in batch[0] else None
 
         for item in batch:
             pad_len = max_len - len(item["input_ids"])
             input_ids.append(item["input_ids"] + [tokenizer.pad_token_id] * pad_len)
             attention_mask.append(item["attention_mask"] + [0] * pad_len)
             labels.append(item["labels"] + [-100] * pad_len)
+            if token_type_ids is not None:
+                token_type_ids.append(item["token_type_ids"] + [0] * pad_len)
 
-        return {
+        collated = {
             "input_ids": torch.tensor(input_ids, dtype=torch.long),
             "attention_mask": torch.tensor(attention_mask, dtype=torch.long),
             "labels": torch.tensor(labels, dtype=torch.long),
         }
+        if token_type_ids is not None:
+            collated["token_type_ids"] = torch.tensor(token_type_ids, dtype=torch.long)
+        return collated
 
     dtype = torch.bfloat16 if args.dtype == "bfloat16" else torch.float16
     model = AutoModelForCausalLM.from_pretrained(
