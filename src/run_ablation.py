@@ -1,5 +1,6 @@
 import argparse
 import json
+import re
 import subprocess
 from datetime import datetime
 from pathlib import Path
@@ -28,6 +29,8 @@ def parse_args():
                         help="Allow overwriting an existing output JSON")
     parser.add_argument("--num_samples", type=int, default=None,
                         help="Number of samples to run (default: all)")
+    parser.add_argument("--generation_max_tokens", type=int, default=5,
+                        help="Max generated tokens for answer extraction")
     parser.add_argument("--vllm_gpu_memory_utilization", type=float, default=None,
                         help="Optional vLLM GPU memory utilization cap")
     parser.add_argument("--vllm_max_model_len", type=int, default=None,
@@ -35,10 +38,21 @@ def parse_args():
     return parser.parse_args()
 
 
-def load_engine(engine_name, model_name, lora_adapter=None, vllm_gpu_memory_utilization=None, vllm_max_model_len=None):
+def load_engine(
+    engine_name,
+    model_name,
+    lora_adapter=None,
+    vllm_gpu_memory_utilization=None,
+    vllm_max_model_len=None,
+    generation_max_tokens=5,
+):
     if engine_name == "transformers":
         from transformer_engine import TransformerEngine
-        return TransformerEngine(model_name, lora_adapter=lora_adapter)
+        return TransformerEngine(
+            model_name,
+            lora_adapter=lora_adapter,
+            generation_max_tokens=generation_max_tokens,
+        )
 
     if engine_name == "vllm":
         from vllm_engine import VLLMEngine
@@ -47,6 +61,7 @@ def load_engine(engine_name, model_name, lora_adapter=None, vllm_gpu_memory_util
             lora_adapter=lora_adapter,
             gpu_memory_utilization=vllm_gpu_memory_utilization,
             max_model_len=vllm_max_model_len,
+            generation_max_tokens=generation_max_tokens,
         )
 
     raise ValueError(f"Unknown engine: {engine_name}")
@@ -164,6 +179,10 @@ def format_prompt(row):
 # Extract answer
 # ----------------------------
 def extract_answer(text):
+    final_answer_match = re.search(r"FINAL ANSWER\s*:\s*([ABC])\b", text, flags=re.IGNORECASE)
+    if final_answer_match:
+        return final_answer_match.group(1).upper()
+
     if "Answer:" in text:
         return text.split("Answer:")[-1].strip()
     return text.strip()
@@ -173,7 +192,16 @@ def extract_answer(text):
 # Mapping
 # ----------------------------
 def map_prediction(pred):
-    pred = pred.strip().upper()
+    pred = pred.strip()
+    final_answer_match = re.search(r"FINAL ANSWER\s*:\s*([ABC])\b", pred, flags=re.IGNORECASE)
+    if final_answer_match:
+        pred = final_answer_match.group(1)
+    else:
+        answer_match = re.search(r"ANSWER\s*:\s*([ABC])\b", pred, flags=re.IGNORECASE)
+        if answer_match:
+            pred = answer_match.group(1)
+
+    pred = pred.upper()
 
     if pred.startswith("A"):
         return 0
@@ -245,6 +273,7 @@ def run(args):
         lora_adapter=args.lora_adapter,
         vllm_gpu_memory_utilization=args.vllm_gpu_memory_utilization,
         vllm_max_model_len=args.vllm_max_model_len,
+        generation_max_tokens=args.generation_max_tokens,
     )
 
     with open(input_path) as f:

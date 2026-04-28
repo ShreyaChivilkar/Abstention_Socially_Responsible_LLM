@@ -25,6 +25,8 @@ def test_prediction_parsing_requires_option_letters():
         " A. The first option": 0,
         "b": 1,
         "C)": 2,
+        "Reasoning: The context is ambiguous.\nFinal answer: B": 1,
+        "Answer: C": 2,
         "UNKNOWN": -1,
         "Undetermined": -1,
         "malformed text": -1,

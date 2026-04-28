@@ -2,7 +2,8 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 import torch
 
 class TransformerEngine:
-    def __init__(self, model_name, lora_adapter=None):
+    def __init__(self, model_name, lora_adapter=None, generation_max_tokens=5):
+        self.generation_max_tokens = generation_max_tokens
         self.tokenizer = AutoTokenizer.from_pretrained(model_name)
         self.model = AutoModelForCausalLM.from_pretrained(
             model_name,
@@ -21,7 +22,7 @@ class TransformerEngine:
 
         outputs = self.model.generate(
             **inputs,
-            max_new_tokens=5,
+            max_new_tokens=self.generation_max_tokens,
             do_sample=False
         )
 
