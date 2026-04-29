@@ -55,6 +55,10 @@ cover/
 jobs/
 logs/
 
+# Large model artifacts
+outputs/sft/checkpoints/*
+!outputs/sft/checkpoints/.gitkeep
+
 # Translations
 *.mo
 *.pot

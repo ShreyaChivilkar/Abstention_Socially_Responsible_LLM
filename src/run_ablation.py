@@ -1,5 +1,7 @@
 import argparse
 import json
+import re
+import subprocess
 from datetime import datetime
 from pathlib import Path
 
@@ -11,28 +13,111 @@ from prompts import BASE_PROMPT
 ROOT_DIR = Path(__file__).resolve().parents[1]
 DATA_DIR = ROOT_DIR / "data"
 OUTPUT_DIR = ROOT_DIR / "outputs"
+PROMPT_NAME = "base_prompt_context_abc"
 
 
 def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--engine", choices=["transformers", "vllm"], default="vllm")
     parser.add_argument("--model", type=str, default="mistralai/Mistral-7B-Instruct-v0.2")
+    parser.add_argument("--lora_adapter", type=str, default=None,
+                        help="Optional PEFT LoRA adapter path to evaluate with the base model")
     parser.add_argument("--split", choices=["train", "dev", "test"], default="test")
+    parser.add_argument("--output", type=str, default=None,
+                        help="Output JSON path. Defaults to outputs/baselines/<split>/<model>__<engine>__base_prompt_context_abc.json")
+    parser.add_argument("--overwrite", action="store_true",
+                        help="Allow overwriting an existing output JSON")
     parser.add_argument("--num_samples", type=int, default=None,
                         help="Number of samples to run (default: all)")
+    parser.add_argument("--generation_max_tokens", type=int, default=5,
+                        help="Max generated tokens for answer extraction")
+    parser.add_argument("--vllm_gpu_memory_utilization", type=float, default=None,
+                        help="Optional vLLM GPU memory utilization cap")
+    parser.add_argument("--vllm_max_model_len", type=int, default=None,
+                        help="Optional vLLM max model length override")
     return parser.parse_args()
 
 
-def load_engine(engine_name, model_name):
+def load_engine(
+    engine_name,
+    model_name,
+    lora_adapter=None,
+    vllm_gpu_memory_utilization=None,
+    vllm_max_model_len=None,
+    generation_max_tokens=5,
+):
     if engine_name == "transformers":
         from transformer_engine import TransformerEngine
-        return TransformerEngine(model_name)
+        return TransformerEngine(
+            model_name,
+            lora_adapter=lora_adapter,
+            generation_max_tokens=generation_max_tokens,
+        )
 
     if engine_name == "vllm":
         from vllm_engine import VLLMEngine
-        return VLLMEngine(model_name)
+        return VLLMEngine(
+            model_name,
+            lora_adapter=lora_adapter,
+            gpu_memory_utilization=vllm_gpu_memory_utilization,
+            max_model_len=vllm_max_model_len,
+            generation_max_tokens=generation_max_tokens,
+        )
 
     raise ValueError(f"Unknown engine: {engine_name}")
+
+
+def safe_name(text):
+    safe = []
+    for char in text.lower():
+        if char.isalnum():
+            safe.append(char)
+        elif char in {".", "-"}:
+            safe.append(char)
+        else:
+            safe.append("_")
+    return "".join(safe).strip("_")
+
+
+def default_output_path(args):
+    model_name = safe_name(args.model)
+    if args.lora_adapter:
+        adapter_name = safe_name(Path(args.lora_adapter).name)
+        filename = f"{model_name}__{adapter_name}__{args.engine}__{PROMPT_NAME}.json"
+        return OUTPUT_DIR / "sft" / "evals" / args.split / filename
+
+    filename = f"{model_name}__{args.engine}__{PROMPT_NAME}.json"
+    return OUTPUT_DIR / "baselines" / args.split / filename
+
+
+def get_git_commit():
+    try:
+        return subprocess.check_output(
+            ["git", "rev-parse", "HEAD"],
+            cwd=ROOT_DIR,
+            text=True,
+            stderr=subprocess.DEVNULL,
+        ).strip()
+    except Exception:
+        return None
+
+
+def get_package_versions():
+    versions = {}
+    for package in ["torch", "transformers", "vllm", "peft"]:
+        try:
+            module = __import__(package)
+            versions[package] = getattr(module, "__version__", None)
+        except ImportError:
+            versions[package] = None
+    return versions
+
+
+def display_path(path):
+    try:
+        return str(path.relative_to(ROOT_DIR))
+    except ValueError:
+        return str(path)
 
 
 # ----------------------------
@@ -94,6 +179,10 @@ def format_prompt(row):
 # Extract answer
 # ----------------------------
 def extract_answer(text):
+    final_answer_match = re.search(r"FINAL ANSWER\s*:\s*([ABC])\b", text, flags=re.IGNORECASE)
+    if final_answer_match:
+        return final_answer_match.group(1).upper()
+
     if "Answer:" in text:
         return text.split("Answer:")[-1].strip()
     return text.strip()
@@ -103,7 +192,16 @@ def extract_answer(text):
 # Mapping
 # ----------------------------
 def map_prediction(pred):
-    pred = pred.strip().upper()
+    pred = pred.strip()
+    final_answer_match = re.search(r"FINAL ANSWER\s*:\s*([ABC])\b", pred, flags=re.IGNORECASE)
+    if final_answer_match:
+        pred = final_answer_match.group(1)
+    else:
+        answer_match = re.search(r"ANSWER\s*:\s*([ABC])\b", pred, flags=re.IGNORECASE)
+        if answer_match:
+            pred = answer_match.group(1)
+
+    pred = pred.upper()
 
     if pred.startswith("A"):
         return 0
@@ -155,9 +253,28 @@ def compute_metrics_by_context(rows):
 # Main
 # ----------------------------
 def run(args):
-    engine = load_engine(args.engine, args.model)
     input_path = DATA_DIR / f"{args.split}.jsonl"
     assert input_path.exists(), f"Missing split file: {input_path}"
+    if args.lora_adapter is not None:
+        lora_adapter_path = Path(args.lora_adapter)
+        if not lora_adapter_path.is_absolute():
+            lora_adapter_path = ROOT_DIR / lora_adapter_path
+        assert lora_adapter_path.exists(), f"Missing LoRA adapter path: {lora_adapter_path}"
+        args.lora_adapter = str(lora_adapter_path)
+
+    output_path = Path(args.output) if args.output else default_output_path(args)
+    if not output_path.is_absolute():
+        output_path = ROOT_DIR / output_path
+    assert args.overwrite or not output_path.exists(), f"Output already exists: {output_path}"
+
+    engine = load_engine(
+        args.engine,
+        args.model,
+        lora_adapter=args.lora_adapter,
+        vllm_gpu_memory_utilization=args.vllm_gpu_memory_utilization,
+        vllm_max_model_len=args.vllm_max_model_len,
+        generation_max_tokens=args.generation_max_tokens,
+    )
 
     with open(input_path) as f:
         data = [json.loads(line) for line in f]
@@ -222,6 +339,8 @@ def run(args):
     print("\nRESULTS")
     print(f"Engine: {args.engine}")
     print(f"Model: {args.model}")
+    if args.lora_adapter:
+        print(f"LoRA adapter: {args.lora_adapter}")
     print(f"Split: {args.split}")
 
     for name, slice_metrics in metrics.items():
@@ -232,17 +351,21 @@ def run(args):
         print(f"Commit rate: {slice_metrics['commit_rate']:.3f}")
         print(f"Invalid rate: {slice_metrics['invalid_rate']:.3f}")
 
-    OUTPUT_DIR.mkdir(exist_ok=True)
-
-    safe_model = args.model.replace("/", "_")
-    output_path = OUTPUT_DIR / f"{args.split}_{args.engine}_{safe_model}.json"
+    output_path.parent.mkdir(parents=True, exist_ok=True)
 
     final_output = {
         "metadata": {
             "engine": args.engine,
             "model": args.model,
+            "lora_adapter": args.lora_adapter,
+            "lora_adapter_relative": display_path(Path(args.lora_adapter)) if args.lora_adapter else None,
             "split": args.split,
+            "prompt_name": PROMPT_NAME,
             "input_path": str(input_path),
+            "input_path_relative": display_path(input_path),
+            "output_path_relative": display_path(output_path),
+            "git_commit": get_git_commit(),
+            "package_versions": get_package_versions(),
             "timestamp": datetime.now().isoformat(),
             "num_samples": len(results)
         },
